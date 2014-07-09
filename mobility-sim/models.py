@@ -29,11 +29,14 @@
 #The fact that you are presently reading this means that you have had
 #knowledge of the CeCILL license and that you accept its terms.
 
+from collections import defaultdict
 from optimisation import global_cedo, global_cedoplus
 from stats import mean
 from statsmodels.distributions.empirical_distribution import ECDF
 from utils import content_affectation, content_affectation_random, content_affectation_real, content_affectation_value, display_affectation, FixedSortedList
 
+import gc
+import itertools as it
 import logging
 import numpy as np
 import os
@@ -199,7 +202,7 @@ class Trace(object):
         
         logger.info("Starting to read the trace.")
         
-        with open(self.filename, "rb") as f:
+        with open(self.filename, "r") as f:
         
             current_time = None
             
@@ -219,7 +222,7 @@ class Trace(object):
                 
                 # clean the data types. 
                 # 0 is epoch, 1 identifier, 2 x-coordinate, 3 y-coordinate. 
-                line = [int(l[0]), l[1].decode('utf-8'), float(l[2]), float(l[3])]
+                line = [int(l[0]), l[1], float(l[2]), float(l[3])]
                 
                 #change of epoch. we'll miss the last one though.
                 if line[0] != current_time.timestamp: 
@@ -231,6 +234,7 @@ class Trace(object):
                     e += 1
                     if e % 1000 == 0:
                         logger.debug("Processing time %d.", current_time.timestamp)
+                        gc.collect()
 
                     #sorting by x to fasten processing (when (x1-x2)^2 > intercontact_distance^2, we can exit)
                     nodes.sort(key=lambda v: v.x)
@@ -238,12 +242,12 @@ class Trace(object):
                     # computing the intermeeting times for each node in this epoch
                     for i, node1 in enumerate(nodes):
                         
-                        # not using node1, node2 in it.combinations(tmp_vehicules, 2):
+                        # not using node1, node2 in it.combinations(nodes, 2):
                         # because it would yield all the combinations, and we try to be smart by breaking when two nodes start to be too far away
 
                         # iterations on the nodes pairs. no need to consider previous nodes because they have already considered the current one.
 
-                        for j, node2 in enumerate(nodes[i+1:]): 
+                        for node2 in nodes[i+1:]:
                             # 1-D euclidian distance. saving it to reuse it in the 2-D distance.
                             diff_x = (node1.x-node2.x)**2
 
@@ -268,6 +272,81 @@ class Trace(object):
                     continue
                 
                 node.update_pos(line[2], line[3])
+    
+    def compute_distances(self):
+        distances = defaultdict(float)
+        
+        logger.info("Starting to read the trace for distance computing. Gonna take some time, go grab a coffee!")
+        sqrt=np.sqrt
+        
+        with open(self.filename, "r") as f:
+        
+            current_time = None
+            
+            #import csv
+            #cr = csv.reader(f, delimiter = ' ')
+            #current_time = None
+            
+             # list because we'll have to sort it
+            nodes = list(self.nodes.values())
+
+            # number of epochs (displaying purposes)
+            e = 0
+            
+            # initialization of current_time (we don't want to process the intermeetings before the first epoch has been unrolled)
+            first_line = next(f).split()
+            current_time = first_line[0]
+            f.seek(0) # be kind rewind
+            
+            for raw_line in f:
+                
+                # for csv
+                #if l[0] == ' ' or l[0] == '':
+                #    l = l[1:]
+                
+                l = raw_line.split()
+                
+                # clean the data types. 
+                # 0 is epoch, 1 identifier, 2 x-coordinate, 3 y-coordinate. 
+                line = [l[0], l[1], float(l[2]), float(l[3])]
+                
+                #change of epoch. we'll miss the last one though.
+                if line[0] != current_time: 
+                    
+                    current_time = line[0]
+                    
+                    # Arbitrary display. TODO: make it customizable
+                    e += 1
+                    if e % 1000 == 0:
+                        logger.debug("Processing time %s.", current_time)
+
+                    # computing the intermeeting times for each node in this epoch
+                    for i, node1 in enumerate(nodes):
+                        for node2 in nodes[i+1:]: 
+                        
+                            n1pk,n2pk=node1.pk,node2.pk
+                            if n1pk < n2pk:
+                                t = (n1pk,n2pk)
+                            else:
+                                t = (n2pk, n1pk)
+                                
+                            #t = tuple(sorted([node1.pk, node2.pk]))
+                            distances[t] += sqrt((node1.x-node2.x)**2 + (node1.y-node2.y)**2)
+                        
+                # after we have switched epoch (or not), we can update the vehicules
+                node_id = line[1]
+                
+                # We'll only consider the vehicules we've defined as such
+                node = self.nodes.get(node_id)
+                if not node:
+                    continue
+                
+                node.update_pos(line[2], line[3])
+        
+        # normalizing
+        for t,d in distances.items():
+            distances[t] = d/e
+        self.distances = distances
     
     def run_simulation(self, TTL, distributed, request_rate = 50, save = False, replay = False):
         """ Run the simulation. 
@@ -883,7 +962,11 @@ class Node(object):
         
         # we want a unique identifier for this pair of vehicules.
         # sorting to avoid duplicates
-        t = tuple(sorted([node.pk, self.pk]))
+        selfpk,nodepk=self.pk,node.pk
+        if selfpk < nodepk:
+            t = (selfpk,nodepk)
+        else:
+            t = (nodepk, selfpk)
         
         if not t in self._im: # first meeting, not much to do
             

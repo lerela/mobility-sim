@@ -46,7 +46,7 @@ def fmax_ampl(L, B, p, q, solver, real=False):
         'n': len(q), # nb of contents
         'q': q, # query rates
         }
-    print(p)
+
     tmp_dat = generate_temp_dat(params)
     
     output = execute_ampl(

@@ -69,12 +69,21 @@ if __name__ == "__main__":
         default = 'couenne',
         required = False)
     parser.add_argument('-a', action="store_true", help="Run the distributed algorithm.")
+    parser.add_argument('-cd', action="store_true", help="Only compute distances then return.")
     args = parser.parse_args()
 
     trace = Trace(args.filename, args.nodes, args.distance)
+    
     trace = trace.setup()
+    
+    if args.cd:
+        trace.compute_distances()
+        
     trace.save()
     
+    if args.cd:
+        exit() 
+        
     trace.build_contents(args.contents)  
     #trace.display_stats()
     
